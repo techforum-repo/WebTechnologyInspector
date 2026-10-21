@@ -1,0 +1,153 @@
+﻿# ==========================================
+# Web Technology Inspector
+# Git exclusions
+# ==========================================
+
+# Python virtual environments
+.venv/
+venv/
+env/
+ENV/
+.python-version
+
+# Python generated files
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.tox/
+.nox/
+.coverage
+.coverage.*
+htmlcov/
+coverage.xml
+
+# Build and distribution
+build/
+dist/
+*.egg-info/
+.eggs/
+pip-wheel-metadata/
+
+# IDE and editor
+.vscode/
+.idea/
+*.code-workspace
+*.swp
+*.swo
+*~
+
+# Operating system
+.DS_Store
+Thumbs.db
+Desktop.ini
+
+# Application backups
+backup/
+backups/
+backup_*/
+backup_v*/
+**/backup_*/
+**/backup_v*/
+*.bak
+*.backup
+*.orig
+
+# Legacy application files
+legacy_pages/
+
+# Local environment configurations
+config/aem_mappings.json
+config/aem_environments.json
+config/*.local.json
+config/*.private.json
+config/*token*
+config/*secret*
+config/*.tmp
+
+# Streamlit credentials and settings
+.streamlit/secrets.toml
+.streamlit/credentials.toml
+
+# Environment variables
+.env
+.env.*
+!.env.example
+
+# Credentials and certificates
+*.pem
+*.p12
+*.pfx
+*.key
+*.jks
+*.keystore
+*credentials*.json
+*secrets*.json
+*token*.json
+
+# Scan output and local history
+data/
+history/
+scan_results/
+scan_output/
+output/
+outputs/
+exports/
+reports/
+screenshots/
+artifacts/
+tmp/
+temp/
+
+# Network captures
+*.har
+*.pcap
+*.pcapng
+*.netlog
+
+# Investigation exports
+investigation*.json
+investigation*.html
+attribution_report*.json
+aem_property_matches*.json
+component_inventory*.json
+requests.csv
+requests.json
+dependencies.dot
+page_screenshot*.png
+
+# Logs
+*.log
+logs/
+
+# Local databases
+*.db
+*.sqlite
+*.sqlite3
+
+# PowerShell generated upgrade scripts
+upgrade_*.ps1
+setup_*_local.ps1
+
+# Local test artifacts
+test-results/
+playwright-report/
+
+# Local configuration - never commit
+/config/*.json
+/config/*.tmp
+!/config/.gitkeep
+
+# Local backups
+/backup_*/
+/backups/
+/legacy_pages/
+
+# Local investigation data
+/data/
+/reports/
+/screenshots/
+/exports/
+/scan_results/
