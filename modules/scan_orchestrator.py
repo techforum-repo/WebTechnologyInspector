@@ -21,7 +21,7 @@ from modules.page_investigator import (
 )
 
 
-def run_investigation(url, mappings, environments):
+def run_investigation(url, mappings, environments, session_tokens=None):
     """Run stages independently and preserve partial results."""
 
     result = {
@@ -100,7 +100,20 @@ def run_investigation(url, mappings, environments):
         resolved = resolve(url, mapping, environment)
         result["content_path"] = resolved["content_path"]
 
-        auth = token_status(environment)
+        identity = (
+            environment["id"]
+            + "|"
+            + environment["author_base"].rstrip("/")
+        )
+
+        session_token = (
+            (session_tokens or {}).get(identity)
+        )
+
+        auth = token_status(
+            environment,
+            session_token=session_token
+        )
 
         if auth["status"] in (
             "missing", "expired", "unavailable"
@@ -177,3 +190,4 @@ def safe_report(result, analysis):
             "Dialog field definitions may be unavailable."
         ]
     }
+

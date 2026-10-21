@@ -1,16 +1,46 @@
-﻿"""Environment-level token storage using the OS credential vault."""
+﻿"""Cross-platform encrypted AEM token storage.
+
+Long tokens are encrypted using Fernet.
+Encryption keys are stored in the OS credential vault.
+
+No plaintext fallback is permitted.
+"""
 
 import base64
+import hashlib
 import json
+import os
 import time
+from pathlib import Path
 
 import keyring
-from keyring.errors import KeyringError, PasswordDeleteError
+from cryptography.fernet import Fernet, InvalidToken
+from keyring.errors import PasswordDeleteError
 
-SERVICE = "web-technology-inspector/aem"
+SERVICE = "web-technology-inspector/aem-v103"
+
+LEGACY_SERVICE = "web-technology-inspector/aem"
+
+DATA_DIR = (
+    Path.home()
+    / ".web-technology-inspector"
+    / "credentials"
+)
 
 
-def _key(environment):
+def _identity(environment):
+    value = (
+        str(environment["id"])
+        + "|"
+        + environment["author_base"].rstrip("/")
+    )
+
+    return hashlib.sha256(
+        value.encode("utf-8")
+    ).hexdigest()
+
+
+def _legacy_key(environment):
     return (
         str(environment["id"])
         + "|"
@@ -18,58 +48,181 @@ def _key(environment):
     )
 
 
-def _require_backend():
+def _credential_path(environment):
+    return DATA_DIR / (_identity(environment) + ".enc")
+
+
+def _require_keyring():
     backend = keyring.get_keyring()
 
     if getattr(backend, "priority", 0) <= 0:
         raise RuntimeError(
-            "No usable OS credential store is available"
+            "No secure OS credential vault is available"
+        )
+
+    name = (
+        backend.__class__.__module__
+        + "."
+        + backend.__class__.__name__
+    ).lower()
+
+    if any(
+        item in name
+        for item in ("plaintext", "fail", "null")
+    ):
+        raise RuntimeError(
+            "Insecure credential backend rejected"
         )
 
 
-def save_token(environment, token):
-    _require_backend()
+def _ensure_directory():
+    DATA_DIR.mkdir(
+        parents=True,
+        exist_ok=True
+    )
 
-    if not token or not token.strip():
-        raise ValueError("A nonempty token is required")
+    if os.name != "nt":
+        os.chmod(DATA_DIR, 0o700)
+
+
+def _get_encryption_key(environment, create=False):
+    _require_keyring()
+
+    identity = _identity(environment)
+
+    key = keyring.get_password(
+        SERVICE,
+        identity
+    )
+
+    if key:
+        return key.encode("ascii")
+
+    if not create:
+        return None
+
+    generated = Fernet.generate_key()
 
     keyring.set_password(
         SERVICE,
-        _key(environment),
-        token.strip()
+        identity,
+        generated.decode("ascii")
     )
+
+    return generated
+
+
+def save_token(environment, token):
+    """Encrypt and persist a token of arbitrary practical length."""
+
+    if not isinstance(token, str) or not token.strip():
+        raise ValueError("Token cannot be empty")
+
+    token = token.strip()
+
+    if len(token.encode("utf-8")) > 1024 * 1024:
+        raise ValueError("Token exceeds the 1 MB safety limit")
+
+    _ensure_directory()
+
+    key = _get_encryption_key(
+        environment,
+        create=True
+    )
+
+    encrypted = Fernet(key).encrypt(
+        token.encode("utf-8")
+    )
+
+    destination = _credential_path(environment)
+    temporary = destination.with_suffix(".tmp")
+
+    try:
+        with open(temporary, "wb") as handle:
+            handle.write(encrypted)
+
+        if os.name != "nt":
+            os.chmod(temporary, 0o600)
+
+        os.replace(temporary, destination)
+
+    finally:
+        if temporary.exists():
+            temporary.unlink()
 
 
 def get_token(environment):
-    _require_backend()
+    """Retrieve token from encrypted storage or legacy vault."""
+
+    destination = _credential_path(environment)
+
+    if destination.exists():
+        key = _get_encryption_key(
+            environment,
+            create=False
+        )
+
+        if not key:
+            raise RuntimeError(
+                "Encryption key unavailable"
+            )
+
+        try:
+            encrypted = destination.read_bytes()
+
+            return Fernet(key).decrypt(
+                encrypted
+            ).decode("utf-8")
+
+        except InvalidToken as exc:
+            raise RuntimeError(
+                "Stored credential could not be decrypted"
+            ) from exc
+
+    # Backward compatibility with earlier short tokens.
+    _require_keyring()
 
     return keyring.get_password(
-        SERVICE,
-        _key(environment)
+        LEGACY_SERVICE,
+        _legacy_key(environment)
     )
 
 
 def delete_token(environment):
-    _require_backend()
+    """Remove encrypted token and associated credential keys."""
+
+    destination = _credential_path(environment)
+
+    if destination.exists():
+        destination.unlink()
+
+    _require_keyring()
+
+    for service, identity in (
+        (SERVICE, _identity(environment)),
+        (LEGACY_SERVICE, _legacy_key(environment)),
+    ):
+        try:
+            keyring.delete_password(service, identity)
+        except PasswordDeleteError:
+            pass
+
+
+def token_status(environment, session_token=None):
+    """Report local token availability and advisory JWT expiry."""
 
     try:
-        keyring.delete_password(
-            SERVICE,
-            _key(environment)
+        token = (
+            session_token
+            if session_token
+            else get_token(environment)
         )
-    except PasswordDeleteError:
-        pass
 
-
-def token_status(environment):
-    try:
-        token = get_token(environment)
-
-    except (KeyringError, RuntimeError, OSError) as exc:
+    except Exception as exc:
         return {
             "status": "unavailable",
             "message": (
-                "Secure credential storage unavailable: "
+                "Credential storage unavailable: "
                 + type(exc).__name__
             ),
             "token": None
@@ -81,9 +234,6 @@ def token_status(environment):
             "message": "No token configured",
             "token": None
         }
-
-    # JWT expiry is an unverified local hint.
-    # Server acceptance remains authoritative.
 
     parts = token.split(".")
 
@@ -107,25 +257,20 @@ def token_status(environment):
                 if remaining <= 0:
                     return {
                         "status": "expired",
-                        "message": "Token has expired",
+                        "message": "AEM token has expired",
                         "token": None
                     }
 
                 if remaining < 900:
                     return {
                         "status": "expiring",
-                        "message": (
-                            "Token expires within 15 minutes"
-                        ),
+                        "message": "Token expires within 15 minutes",
                         "token": token
                     }
 
                 return {
                     "status": "available",
-                    "message": (
-                        "Token stored; JWT expiry "
-                        "has not been reached"
-                    ),
+                    "message": "Token available; JWT expiry not reached",
                     "token": token
                 }
 
@@ -139,9 +284,6 @@ def token_status(environment):
 
     return {
         "status": "unknown",
-        "message": (
-            "Token stored; expiry unknown "
-            "until server validation"
-        ),
+        "message": "Token available; expiry unknown",
         "token": token
     }

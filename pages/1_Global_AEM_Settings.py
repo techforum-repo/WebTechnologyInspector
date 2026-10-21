@@ -71,7 +71,20 @@ with tab1:
         )
 
         env = envs[index]
-        auth = token_status(env)
+        identity = (
+            env["id"]
+            + "|"
+            + env["author_base"].rstrip("/")
+        )
+
+        session_token = st.session_state.get(
+            "session_aem_tokens", {}
+        ).get(identity)
+
+        auth = token_status(
+            env,
+            session_token=session_token
+        )
 
         st.info(auth["message"])
 
@@ -103,10 +116,27 @@ with tab1:
                 save("aem_environments.json", "environments", envs)
                 st.rerun()
 
+        st.subheader("AEM Developer Console Authentication")
+
+        st.caption(
+            "Supports long AEM Developer Console tokens. "
+            "Persistent tokens are encrypted locally, with "
+            "the encryption key stored in the OS credential vault."
+        )
+
+        storage_mode = st.radio(
+            "Token storage",
+            ["Encrypted local storage", "Session only"],
+            horizontal=True,
+            key="aem_storage_mode"
+        )
+
         with st.form("environment_token"):
-            token = st.text_input(
-                "Bearer Token",
-                type="password"
+            token = st.text_area(
+                "AEM Developer Console Access Token",
+                height=120,
+                placeholder="Paste your access token",
+                help="Token contents are never displayed in reports."
             )
             store = st.form_submit_button(
                 "Save / Replace Token"
@@ -114,13 +144,43 @@ with tab1:
 
         if store:
             try:
-                save_token(env, token)
-                st.success("Token stored in OS credential vault.")
+                if not token.strip():
+                    st.error("Enter an access token.")
+                elif storage_mode == "Session only":
+                    if "session_aem_tokens" not in st.session_state:
+                        st.session_state["session_aem_tokens"] = {}
+
+                    identity = (
+                        env["id"]
+                        + "|"
+                        + env["author_base"].rstrip("/")
+                    )
+
+                    st.session_state["session_aem_tokens"][identity] = token.strip()
+
+                    st.toast("Session token configured")
+                    st.rerun()
+                else:
+                    save_token(env, token)
+                    st.toast("Encrypted token saved")
+                    st.rerun()
             except Exception as exc:
                 st.error(
                     "Credential storage failed: "
                     + type(exc).__name__
                 )
+
+        identity = (
+            env["id"]
+            + "|"
+            + env["author_base"].rstrip("/")
+        )
+
+        if st.button("Clear Session Token"):
+            st.session_state.get(
+                "session_aem_tokens", {}
+            ).pop(identity, None)
+            st.rerun()
 
         if st.button("Remove Token"):
             try:
@@ -144,153 +204,346 @@ with tab1:
                 save("aem_environments.json", "environments", envs)
                 st.rerun()
 
+
 with tab2:
     st.subheader("Website Mappings")
 
-    if mappings:
-        st.dataframe(
-            pd.DataFrame(mappings),
-            width="stretch"
-        )
+    def mapping_valid(name, domain, prefix, root):
+        from urllib.parse import urlsplit
+
+        domain = domain.strip().lower()
+        prefix = prefix.rstrip("/") or "/"
+        root = root.rstrip("/")
+
+        try:
+            parsed = urlsplit("https://" + domain)
+
+            return (
+                bool(name.strip())
+                and bool(domain)
+                and parsed.hostname == domain
+                and parsed.port is None
+                and not parsed.username
+                and not parsed.password
+                and prefix.startswith("/")
+                and root.startswith("/content/")
+                and all(
+                    part not in (".", "..")
+                    for part in prefix.split("/")
+                )
+                and all(
+                    part not in (".", "..")
+                    for part in root.split("/")
+                )
+            )
+        except ValueError:
+            return False
 
     if not envs:
         st.warning("Create an AEM environment first.")
+
     else:
         options = {
             e["id"]: e["name"]
             for e in envs
         }
 
-        with st.form("new_mapping"):
-            name = st.text_input("Website Name")
-            domain = st.text_input(
-                "Published Domain",
-                placeholder="www.example.com"
-            )
-            prefix = st.text_input(
-                "Published Prefix", value="/en"
-            )
-            content_root = st.text_input(
-                "AEM Content Root",
-                placeholder="/content/example/en"
-            )
-            environment_id = st.selectbox(
-                "AEM Environment",
-                list(options),
-                format_func=lambda x: options[x]
-            )
-            create = st.form_submit_button("Add Mapping")
+        if "mapping_mode" not in st.session_state:
+            st.session_state.mapping_mode = "list"
 
-        if create:
-            domain = domain.strip().lower()
-            prefix = prefix.rstrip("/") or "/"
-            content_root = content_root.rstrip("/")
+        # ---------------------------------
+        # Header
+        # ---------------------------------
 
-            parsed = urlsplit("https://" + domain)
+        col1, col2 = st.columns([4, 1])
 
-            valid = (
-                bool(name.strip())
-                and bool(domain)
-                and parsed.hostname == domain
-                and parsed.port is None
-                and prefix.startswith("/")
-                and content_root.startswith("/content/")
-                and ".." not in prefix.split("/")
-                and ".." not in content_root.split("/")
+        with col1:
+            st.caption(
+                "Manage published website URLs and "
+                "their corresponding AEM content roots."
             )
 
-            duplicate = any(
-                m["published_domain"].lower() == domain
-                and m["published_prefix"] == prefix
-                for m in mappings
-            )
-
-            if not valid:
-                st.error("Invalid website mapping.")
-            elif duplicate:
-                st.error("Mapping already exists.")
-            else:
-                mappings.append({
-                    "name": name.strip(),
-                    "published_domain": domain,
-                    "published_prefix": prefix,
-                    "content_root": content_root,
-                    "environment_id": environment_id
-                })
-                save("aem_mappings.json", "mappings", mappings)
+        with col2:
+            if st.button(
+                "+ New Mapping",
+                type="primary",
+                width="stretch"
+            ):
+                st.session_state.mapping_mode = "new"
                 st.rerun()
 
-        if mappings:
-            st.divider()
-            index = st.selectbox(
-                "Manage Mapping",
-                range(len(mappings)),
-                format_func=lambda i: mappings[i]["name"]
-            )
-            selected = mappings[index]
+        # ---------------------------------
+        # Existing mappings
+        # ---------------------------------
 
-            with st.form("edit_mapping"):
-                edit_name = st.text_input(
-                    "Name", selected["name"]
+        if mappings:
+            rows = []
+
+            for index, item in enumerate(mappings):
+                rows.append({
+                    "Name": item["name"],
+                    "Domain": item["published_domain"],
+                    "Prefix": item["published_prefix"],
+                    "Content Root": item["content_root"],
+                    "Environment": options.get(
+                        item["environment_id"],
+                        "Unknown"
+                    )
+                })
+
+            st.dataframe(
+                pd.DataFrame(rows),
+                width="stretch",
+                hide_index=True
+            )
+
+        else:
+            st.info("No website mappings configured.")
+
+        # ---------------------------------
+        # New mapping
+        # ---------------------------------
+
+        if st.session_state.mapping_mode == "new":
+
+            st.divider()
+            st.subheader("Add Website Mapping")
+
+            with st.form("new_mapping_v104"):
+
+                name = st.text_input(
+                    "Website Name",
+                    placeholder="Example Website"
                 )
-                edit_domain = st.text_input(
-                    "Domain", selected["published_domain"]
+
+                domain = st.text_input(
+                    "Published Domain",
+                    placeholder="www.example.com"
                 )
-                edit_prefix = st.text_input(
-                    "Prefix", selected["published_prefix"]
+
+                prefix = st.text_input(
+                    "Published URL Prefix",
+                    value="/en"
                 )
-                edit_root = st.text_input(
-                    "Content Root", selected["content_root"]
+
+                root = st.text_input(
+                    "AEM Content Root",
+                    placeholder="/content/example/en"
                 )
-                current_id = selected["environment_id"]
-                env_ids = list(options)
-                edit_env = st.selectbox(
-                    "Environment",
-                    env_ids,
-                    index=(
-                        env_ids.index(current_id)
-                        if current_id in env_ids else 0
-                    ),
+
+                eid = st.selectbox(
+                    "AEM Environment",
+                    list(options),
                     format_func=lambda x: options[x]
                 )
-                update = st.form_submit_button("Save Mapping")
 
-            if update:
+                save_new = st.form_submit_button(
+                    "Save New Mapping",
+                    type="primary"
+                )
+
+            if save_new:
+                domain = domain.strip().lower()
+                prefix = prefix.rstrip("/") or "/"
+                root = root.rstrip("/")
+
+                duplicate = any(
+                    m["published_domain"].lower() == domain
+                    and m["published_prefix"] == prefix
+                    for m in mappings
+                )
+
+                if not mapping_valid(
+                    name, domain, prefix, root
+                ):
+                    st.error("Please enter valid mapping details.")
+
+                elif duplicate:
+                    st.error(
+                        "A mapping already exists for "
+                        "this domain and prefix."
+                    )
+
+                else:
+                    mappings.append({
+                        "name": name.strip(),
+                        "published_domain": domain,
+                        "published_prefix": prefix,
+                        "content_root": root,
+                        "environment_id": eid
+                    })
+
+                    save(
+                        "aem_mappings.json",
+                        "mappings",
+                        mappings
+                    )
+
+                    st.session_state.mapping_mode = "list"
+                    st.toast("Website mapping created")
+                    st.rerun()
+
+            if st.button("Cancel New Mapping"):
+                st.session_state.mapping_mode = "list"
+                st.rerun()
+
+        # ---------------------------------
+        # Edit existing mapping
+        # ---------------------------------
+
+        elif mappings:
+
+            st.divider()
+            st.subheader("Edit Existing Mapping")
+
+            selected_index = st.selectbox(
+                "Select Website Mapping",
+                range(len(mappings)),
+                format_func=lambda i: (
+                    mappings[i]["name"]
+                    + " | "
+                    + mappings[i]["published_domain"]
+                    + mappings[i]["published_prefix"]
+                ),
+                key="mapping_selection_v104"
+            )
+
+            current = mappings[selected_index]
+
+            # Each selection receives a distinct
+            # form identity, preventing stale values.
+            form_id = (
+                "edit_mapping_v104_"
+                + str(selected_index)
+            )
+
+            with st.form(form_id):
+
+                edit_name = st.text_input(
+                    "Website Name",
+                    value=current["name"]
+                )
+
+                edit_domain = st.text_input(
+                    "Published Domain",
+                    value=current["published_domain"]
+                )
+
+                edit_prefix = st.text_input(
+                    "Published URL Prefix",
+                    value=current["published_prefix"]
+                )
+
+                edit_root = st.text_input(
+                    "AEM Content Root",
+                    value=current["content_root"]
+                )
+
+                environment_ids = list(options)
+
+                current_env = current["environment_id"]
+
+                env_index = (
+                    environment_ids.index(current_env)
+                    if current_env in environment_ids
+                    else 0
+                )
+
+                edit_env = st.selectbox(
+                    "AEM Environment",
+                    environment_ids,
+                    index=env_index,
+                    format_func=lambda x: options[x]
+                )
+
+                save_edit = st.form_submit_button(
+                    "Save Changes",
+                    type="primary"
+                )
+
+            if save_edit:
+
                 edit_domain = edit_domain.strip().lower()
                 edit_prefix = edit_prefix.rstrip("/") or "/"
                 edit_root = edit_root.rstrip("/")
 
-                parsed = urlsplit("https://" + edit_domain)
-                valid = (
-                    bool(edit_name.strip())
-                    and parsed.hostname == edit_domain
-                    and parsed.port is None
-                    and edit_prefix.startswith("/")
-                    and edit_root.startswith("/content/")
-                    and ".." not in edit_prefix.split("/")
-                    and ".." not in edit_root.split("/")
-                )
                 duplicate = any(
-                    i != index
-                    and m["published_domain"].lower() == edit_domain
-                    and m["published_prefix"] == edit_prefix
-                    for i, m in enumerate(mappings)
+                    i != selected_index
+                    and item["published_domain"].lower()
+                        == edit_domain
+                    and item["published_prefix"]
+                        == edit_prefix
+                    for i, item in enumerate(mappings)
                 )
 
-                if not valid or duplicate:
-                    st.error("Invalid or duplicate mapping.")
-                else:
-                    selected.update(
-                        name=edit_name.strip(),
-                        published_domain=edit_domain,
-                        published_prefix=edit_prefix,
-                        content_root=edit_root,
-                        environment_id=edit_env
+                if not mapping_valid(
+                    edit_name,
+                    edit_domain,
+                    edit_prefix,
+                    edit_root
+                ):
+                    st.error("Invalid mapping details.")
+
+                elif duplicate:
+                    st.error(
+                        "Another mapping already uses "
+                        "this domain and prefix."
                     )
-                    save("aem_mappings.json", "mappings", mappings)
+
+                else:
+                    mappings[selected_index] = {
+                        "name": edit_name.strip(),
+                        "published_domain": edit_domain,
+                        "published_prefix": edit_prefix,
+                        "content_root": edit_root,
+                        "environment_id": edit_env
+                    }
+
+                    save(
+                        "aem_mappings.json",
+                        "mappings",
+                        mappings
+                    )
+
+                    st.toast("Website mapping updated")
                     st.rerun()
 
-            if st.button("Delete Mapping"):
-                mappings.pop(index)
-                save("aem_mappings.json", "mappings", mappings)
-                st.rerun()
+            # ---------------------------------
+            # Delete with confirmation
+            # ---------------------------------
+
+            with st.expander("Delete Mapping"):
+
+                st.warning(
+                    "Deleting this mapping will remove "
+                    "the website-to-AEM association."
+                )
+
+                confirm = st.checkbox(
+                    "I confirm that I want to delete "
+                    "this mapping",
+                    key=(
+                        "delete_confirm_v104_"
+                        + str(selected_index)
+                    )
+                )
+
+                if st.button(
+                    "Delete Selected Mapping",
+                    disabled=not confirm
+                ):
+                    mappings.pop(selected_index)
+
+                    save(
+                        "aem_mappings.json",
+                        "mappings",
+                        mappings
+                    )
+
+                    st.session_state.pop(
+                        "mapping_selection_v104",
+                        None
+                    )
+
+                    st.toast("Website mapping deleted")
+                    st.rerun()

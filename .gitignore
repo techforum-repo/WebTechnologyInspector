@@ -151,3 +151,9 @@ playwright-report/
 /screenshots/
 /exports/
 /scan_results/
+# Local encrypted credentials
+/credentials/
+/.credentials/
+/.web-technology-inspector/
+*.enc
+# Local AEM configuration
