@@ -72,7 +72,12 @@ if st.button(
 ):
     with st.spinner("Running consolidated investigation..."):
         investigation = run_investigation(
-            url, mappings, environments
+            url,
+            mappings,
+            environments,
+            session_tokens=st.session_state.get(
+                "session_aem_tokens", {}
+            )
         )
 
     st.session_state["v09_result"] = investigation
@@ -372,4 +377,5 @@ st.caption(
     "Read-only AEM access | "
     "No tag-management API integration"
 )
+
 
