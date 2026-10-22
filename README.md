@@ -1,3 +1,5 @@
+> **This repository has moved.** It now lives in [`martech-architect-toolkit/web-technology-inspector`](https://github.com/techforum-repo/martech-architect-toolkit/tree/main/web-technology-inspector), with its full commit history. This repo is archived and read-only.
+
 ﻿# Web Technology Inspector
 
 A cross-platform Streamlit application for analyzing
@@ -110,4 +112,3 @@ configuration directory exists after cloning.
 
 AEM credentials are managed through the operating
 system credential store, not JSON files.
-
